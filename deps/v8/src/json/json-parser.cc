@@ -161,7 +161,7 @@ MaybeHandle<Object> JsonParseInternalizer::InternalizeJsonProperty(
       Handle<FixedArray> contents;
       ASSIGN_RETURN_ON_EXCEPTION(
           isolate_, contents,
-          KeyAccumulator::GetKeys(object, KeyCollectionMode::kOwnOnly,
+          KeyAccumulator::GetKeys(isolate_, object, KeyCollectionMode::kOwnOnly,
                                   ENUMERABLE_STRINGS,
                                   GetKeysConversion::kConvertToString),
           Object);
@@ -559,7 +559,7 @@ Handle<Object> JsonParser<Char>::BuildJsonObject(
   Handle<ByteArray> mutable_double_buffer;
   // Allocate enough space so we can double-align the payload.
   const int kMutableDoubleSize = sizeof(double) * 2;
-  STATIC_ASSERT(HeapNumber::kSize <= kMutableDoubleSize);
+  static_assert(HeapNumber::kSize <= kMutableDoubleSize);
   if (new_mutable_double > 0) {
     mutable_double_buffer =
         factory()->NewByteArray(kMutableDoubleSize * new_mutable_double);
@@ -608,7 +608,7 @@ Handle<Object> JsonParser<Char>::BuildJsonObject(
           }
 
           uint64_t bits =
-              bit_cast<uint64_t>(static_cast<double>(Smi::ToInt(value)));
+              base::bit_cast<uint64_t>(static_cast<double>(Smi::ToInt(value)));
           // Allocate simple heapnumber with immortal map, with non-pointer
           // payload, so we can skip notifying object layout change.
 
@@ -937,8 +937,8 @@ Handle<Object> JsonParser<Char>::ParseJsonNumber() {
         return handle(Smi::FromInt(0), isolate_);
       }
       c = CurrentCharacter();
-      STATIC_ASSERT(Smi::IsValid(-999999999));
-      STATIC_ASSERT(Smi::IsValid(999999999));
+      static_assert(Smi::IsValid(-999999999));
+      static_assert(Smi::IsValid(999999999));
       const int kMaxSmiLength = 9;
       if ((cursor_ - smi_start) <= kMaxSmiLength &&
           (!base::IsInRange(c, 0,

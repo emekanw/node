@@ -271,7 +271,7 @@ int WasmTableObject::Grow(Isolate* isolate, Handle<WasmTableObject> table,
 
   uint32_t new_size = old_size + count;
   // Even with 2x over-allocation, there should not be an integer overflow.
-  STATIC_ASSERT(wasm::kV8MaxWasmTableSize <= kMaxInt / 2);
+  static_assert(wasm::kV8MaxWasmTableSize <= kMaxInt / 2);
   DCHECK_GE(kMaxInt, new_size);
   int old_capacity = table->entries().length();
   if (new_size > static_cast<uint32_t>(old_capacity)) {
@@ -390,7 +390,11 @@ void WasmTableObject::Set(Isolate* isolate, Handle<WasmTableObject> table,
     case wasm::HeapType::kData:
     case wasm::HeapType::kArray:
     case wasm::HeapType::kI31:
-      // TODO(7748): Implement once we have struct/arrays/i31ref tables.
+    case wasm::HeapType::kString:
+    case wasm::HeapType::kStringViewWtf8:
+    case wasm::HeapType::kStringViewWtf16:
+    case wasm::HeapType::kStringViewIter:
+      // TODO(7748): Implement once we have struct/arrays/i31ref/string tables.
       UNREACHABLE();
     case wasm::HeapType::kBottom:
       UNREACHABLE();
@@ -1156,15 +1160,8 @@ bool WasmInstanceObject::EnsureIndirectFunctionTableWithMinimumSize(
 
 void WasmInstanceObject::SetRawMemory(byte* mem_start, size_t mem_size) {
   CHECK_LE(mem_size, wasm::max_mem_bytes());
-#if V8_HOST_ARCH_64_BIT
   set_memory_start(mem_start);
   set_memory_size(mem_size);
-#else
-  // Must handle memory > 2GiB specially.
-  CHECK_LE(mem_size, size_t{kMaxUInt32});
-  set_memory_start(mem_start);
-  set_memory_size(mem_size);
-#endif
 }
 
 const WasmModule* WasmInstanceObject::module() {
@@ -1807,8 +1804,6 @@ Handle<WasmSuspenderObject> WasmSuspenderObject::New(Isolate* isolate) {
   // which it will wrap the imports/exports, allocate in old space too.
   auto suspender = Handle<WasmSuspenderObject>::cast(
       isolate->factory()->NewJSObject(suspender_cons, AllocationType::kOld));
-  suspender->set_continuation(ReadOnlyRoots(isolate).undefined_value());
-  suspender->set_parent(ReadOnlyRoots(isolate).undefined_value());
   suspender->set_state(Inactive);
   // Instantiate the callable object which resumes this Suspender. This will be
   // used implicitly as the onFulfilled callback of the returned JS promise.
@@ -2240,7 +2235,7 @@ Handle<AsmWasmData> AsmWasmData::New(
   const bool kUsesLiftoff = false;
   size_t memory_estimate =
       wasm::WasmCodeManager::EstimateNativeModuleCodeSize(
-          module, kUsesLiftoff, wasm::DynamicTiering::kDisabled) +
+          module, kUsesLiftoff, wasm::kNoDynamicTiering) +
       wasm::WasmCodeManager::EstimateNativeModuleMetaDataSize(module);
   Handle<Managed<wasm::NativeModule>> managed_native_module =
       Managed<wasm::NativeModule>::FromSharedPtr(isolate, memory_estimate,

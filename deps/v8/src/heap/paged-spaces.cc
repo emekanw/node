@@ -30,7 +30,7 @@ namespace internal {
 // PagedSpaceObjectIterator
 
 PagedSpaceObjectIterator::PagedSpaceObjectIterator(Heap* heap,
-                                                   PagedSpace* space)
+                                                   const PagedSpace* space)
     : cur_addr_(kNullAddress),
       cur_end_(kNullAddress),
       space_(space),
@@ -46,8 +46,8 @@ PagedSpaceObjectIterator::PagedSpaceObjectIterator(Heap* heap,
 }
 
 PagedSpaceObjectIterator::PagedSpaceObjectIterator(Heap* heap,
-                                                   PagedSpace* space,
-                                                   Page* page)
+                                                   const PagedSpace* space,
+                                                   const Page* page)
     : cur_addr_(kNullAddress),
       cur_end_(kNullAddress),
       space_(space),
@@ -70,13 +70,14 @@ PagedSpaceObjectIterator::PagedSpaceObjectIterator(Heap* heap,
 bool PagedSpaceObjectIterator::AdvanceToNextPage() {
   DCHECK_EQ(cur_addr_, cur_end_);
   if (current_page_ == page_range_.end()) return false;
-  Page* cur_page = *(current_page_++);
+  const Page* cur_page = *(current_page_++);
 
   cur_addr_ = cur_page->area_start();
   cur_end_ = cur_page->area_end();
   DCHECK(cur_page->SweepingDone());
   return true;
 }
+
 Page* PagedSpace::InitializePage(MemoryChunk* chunk) {
   Page* page = static_cast<Page*>(chunk);
   DCHECK_EQ(
@@ -210,6 +211,9 @@ size_t PagedSpace::CommittedPhysicalMemory() const {
     DCHECK_EQ(0, committed_physical_memory());
     return CommittedMemory();
   }
+  CodePageHeaderModificationScope rwx_write_scope(
+      "Updating high water mark for Code pages requries write access to "
+      "the Code page headers");
   BasicMemoryChunk::UpdateHighWaterMark(allocation_info_->top());
   return committed_physical_memory();
 }
@@ -442,8 +446,7 @@ void PagedSpace::MakeLinearAllocationAreaIterable() {
     }
 
     heap_->CreateFillerObjectAt(current_top,
-                                static_cast<int>(current_limit - current_top),
-                                ClearRecordedSlots::kNo);
+                                static_cast<int>(current_limit - current_top));
   }
 }
 
@@ -730,7 +733,7 @@ void PagedSpace::Print() {}
 #endif
 
 #ifdef VERIFY_HEAP
-void PagedSpace::Verify(Isolate* isolate, ObjectVisitor* visitor) {
+void PagedSpace::Verify(Isolate* isolate, ObjectVisitor* visitor) const {
   bool allocation_pointer_found_in_space =
       (allocation_info_->top() == allocation_info_->limit());
   size_t external_space_bytes[kNumTypes];
@@ -741,7 +744,7 @@ void PagedSpace::Verify(Isolate* isolate, ObjectVisitor* visitor) {
   }
 
   PtrComprCageBase cage_base(isolate);
-  for (Page* page : *this) {
+  for (const Page* page : *this) {
     CHECK_EQ(page->owner(), this);
 
     for (int i = 0; i < kNumTypes; i++) {
@@ -816,11 +819,11 @@ void PagedSpace::Verify(Isolate* isolate, ObjectVisitor* visitor) {
 #endif
 }
 
-void PagedSpace::VerifyLiveBytes() {
+void PagedSpace::VerifyLiveBytes() const {
   IncrementalMarking::MarkingState* marking_state =
       heap()->incremental_marking()->marking_state();
   PtrComprCageBase cage_base(heap()->isolate());
-  for (Page* page : *this) {
+  for (const Page* page : *this) {
     CHECK(page->SweepingDone());
     PagedSpaceObjectIterator it(heap(), this, page);
     int black_size = 0;
@@ -836,11 +839,11 @@ void PagedSpace::VerifyLiveBytes() {
 #endif  // VERIFY_HEAP
 
 #ifdef DEBUG
-void PagedSpace::VerifyCountersAfterSweeping(Heap* heap) {
+void PagedSpace::VerifyCountersAfterSweeping(Heap* heap) const {
   size_t total_capacity = 0;
   size_t total_allocated = 0;
   PtrComprCageBase cage_base(heap->isolate());
-  for (Page* page : *this) {
+  for (const Page* page : *this) {
     DCHECK(page->SweepingDone());
     total_capacity += page->area_size();
     PagedSpaceObjectIterator it(heap, this, page);
@@ -860,17 +863,12 @@ void PagedSpace::VerifyCountersAfterSweeping(Heap* heap) {
   DCHECK_EQ(total_allocated, accounting_stats_.Size());
 }
 
-void PagedSpace::VerifyCountersBeforeConcurrentSweeping() {
-  // We need to refine the counters on pages that are already swept and have
-  // not been moved over to the actual space. Otherwise, the AccountingStats
-  // are just an over approximation.
-  RefillFreeList();
-
+void PagedSpace::VerifyCountersBeforeConcurrentSweeping() const {
   size_t total_capacity = 0;
   size_t total_allocated = 0;
   auto marking_state =
       heap()->incremental_marking()->non_atomic_marking_state();
-  for (Page* page : *this) {
+  for (const Page* page : *this) {
     size_t page_allocated =
         page->SweepingDone()
             ? page->allocated_bytes()
@@ -1028,31 +1026,6 @@ void PagedSpace::ReduceActiveSystemPages(
       page->active_system_pages()->Reduce(active_system_pages);
   DecrementCommittedPhysicalMemory(reduced_pages *
                                    MemoryAllocator::GetCommitPageSize());
-}
-
-bool PagedSpace::EnsureAllocation(int size_in_bytes,
-                                  AllocationAlignment alignment,
-                                  AllocationOrigin origin,
-                                  int* out_max_aligned_size) {
-  if (!is_compaction_space()) {
-    // Start incremental marking before the actual allocation, this allows the
-    // allocation function to mark the object black when incremental marking is
-    // running.
-    heap()->StartIncrementalMarkingIfAllocationLimitIsReached(
-        heap()->GCFlagsForIncrementalMarking(),
-        kGCCallbackScheduleIdleGarbageCollection);
-  }
-
-  // We don't know exactly how much filler we need to align until space is
-  // allocated, so assume the worst case.
-  size_in_bytes += Heap::GetMaximumFillToAlign(alignment);
-  if (out_max_aligned_size) {
-    *out_max_aligned_size = size_in_bytes;
-  }
-  if (allocation_info_->top() + size_in_bytes <= allocation_info_->limit()) {
-    return true;
-  }
-  return RefillLabMain(size_in_bytes, origin);
 }
 
 // -----------------------------------------------------------------------------

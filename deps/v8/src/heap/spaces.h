@@ -209,7 +209,7 @@ class V8_EXPORT_PRIVATE Space : public BaseSpace {
   std::unique_ptr<FreeList> free_list_;
 };
 
-STATIC_ASSERT(sizeof(std::atomic<intptr_t>) == kSystemPointerSize);
+static_assert(sizeof(std::atomic<intptr_t>) == kSystemPointerSize);
 
 // -----------------------------------------------------------------------------
 // A page is a memory chunk of a size 256K. Large object pages may be larger.
@@ -334,9 +334,9 @@ class Page : public MemoryChunk {
 };
 
 // Validate our estimates on the header size.
-STATIC_ASSERT(sizeof(BasicMemoryChunk) <= BasicMemoryChunk::kHeaderSize);
-STATIC_ASSERT(sizeof(MemoryChunk) <= MemoryChunk::kHeaderSize);
-STATIC_ASSERT(sizeof(Page) <= MemoryChunk::kHeaderSize);
+static_assert(sizeof(BasicMemoryChunk) <= BasicMemoryChunk::kHeaderSize);
+static_assert(sizeof(MemoryChunk) <= MemoryChunk::kHeaderSize);
+static_assert(sizeof(Page) <= MemoryChunk::kHeaderSize);
 
 // -----------------------------------------------------------------------------
 // Interface for heap object iterator to be implemented by all object space
@@ -355,10 +355,10 @@ class PageIteratorImpl
   explicit PageIteratorImpl(PAGE_TYPE* p) : p_(p) {}
   PageIteratorImpl(const PageIteratorImpl<PAGE_TYPE>& other) : p_(other.p_) {}
   PAGE_TYPE* operator*() { return p_; }
-  bool operator==(const PageIteratorImpl<PAGE_TYPE>& rhs) {
+  bool operator==(const PageIteratorImpl<PAGE_TYPE>& rhs) const {
     return rhs.p_ == p_;
   }
-  bool operator!=(const PageIteratorImpl<PAGE_TYPE>& rhs) {
+  bool operator!=(const PageIteratorImpl<PAGE_TYPE>& rhs) const {
     return rhs.p_ != p_;
   }
   inline PageIteratorImpl<PAGE_TYPE>& operator++();
@@ -386,6 +386,23 @@ class PageRange {
  private:
   Page* begin_;
   Page* end_;
+};
+
+class ConstPageRange {
+ public:
+  using iterator = ConstPageIterator;
+  ConstPageRange(const Page* begin, const Page* end)
+      : begin_(begin), end_(end) {}
+  explicit ConstPageRange(const Page* page)
+      : ConstPageRange(page, page->next_page()) {}
+  inline ConstPageRange(Address start, Address limit);
+
+  iterator begin() { return iterator(begin_); }
+  iterator end() { return iterator(end_); }
+
+ private:
+  const Page* begin_;
+  const Page* end_;
 };
 
 // -----------------------------------------------------------------------------
@@ -560,7 +577,7 @@ class SpaceWithLinearArea : public Space {
                                 int* out_max_aligned_size) = 0;
 
 #if DEBUG
-  V8_EXPORT_PRIVATE void VerifyTop() const;
+  V8_EXPORT_PRIVATE virtual void VerifyTop() const;
 #endif  // DEBUG
 
   LinearAllocationArea* const allocation_info_;

@@ -322,7 +322,7 @@ void ScavengerCollector::CollectGarbage() {
       TRACE_GC(
           heap_->tracer(),
           GCTracer::Scope::SCAVENGER_SCAVENGE_WEAK_GLOBAL_HANDLES_IDENTIFY);
-      isolate_->global_handles()->IdentifyWeakUnmodifiedObjects(
+      isolate_->global_handles()->ComputeWeaknessForYoungObjects(
           &JSObject::IsUnmodifiedApiObject);
     }
     {
@@ -366,16 +366,10 @@ void ScavengerCollector::CollectGarbage() {
       // Scavenge weak global handles.
       TRACE_GC(heap_->tracer(),
                GCTracer::Scope::SCAVENGER_SCAVENGE_WEAK_GLOBAL_HANDLES_PROCESS);
-      isolate_->global_handles()->MarkYoungWeakDeadObjectsPending(
-          &IsUnscavengedHeapObjectSlot);
-      isolate_->global_handles()->IterateYoungWeakDeadObjectsForFinalizers(
-          &root_scavenge_visitor);
-      scavengers[kMainThreadId]->Process();
-
+      isolate_->global_handles()->ProcessWeakYoungObjects(
+          &root_scavenge_visitor, &IsUnscavengedHeapObjectSlot);
       DCHECK(copied_list.IsEmpty());
       DCHECK(promotion_list.IsEmpty());
-      isolate_->global_handles()->IterateYoungWeakObjectsForPhantomHandles(
-          &root_scavenge_visitor, &IsUnscavengedHeapObjectSlot);
     }
 
     {
@@ -404,13 +398,20 @@ void ScavengerCollector::CollectGarbage() {
     if (V8_UNLIKELY(FLAG_track_retaining_path)) {
       heap_->UpdateRetainersAfterScavenge();
     }
+
+    if (V8_UNLIKELY(FLAG_always_use_string_forwarding_table)) {
+      isolate_->string_forwarding_table()->UpdateAfterScavenge();
+    }
   }
+
+  SemiSpaceNewSpace* semi_space_new_space =
+      SemiSpaceNewSpace::From(heap_->new_space());
 
   if (FLAG_concurrent_marking) {
     // Ensure that concurrent marker does not track pages that are
     // going to be unmapped.
     for (Page* p :
-         PageRange(heap_->new_space()->from_space().first_page(), nullptr)) {
+         PageRange(semi_space_new_space->from_space().first_page(), nullptr)) {
       heap_->concurrent_marking()->ClearMemoryChunkData(p);
     }
   }
@@ -418,7 +419,7 @@ void ScavengerCollector::CollectGarbage() {
   ProcessWeakReferences(&ephemeron_table_list);
 
   // Set age mark.
-  heap_->new_space_->set_age_mark(heap_->new_space()->top());
+  semi_space_new_space->set_age_mark(semi_space_new_space->top());
 
   // Since we promote all surviving large objects immediatelly, all remaining
   // large objects must be dead.
@@ -451,6 +452,8 @@ void ScavengerCollector::CollectGarbage() {
     TRACE_GC(heap_->tracer(), GCTracer::Scope::SCAVENGER_SWEEP_ARRAY_BUFFERS);
     SweepArrayBufferExtensions();
   }
+
+  isolate_->global_handles()->UpdateListOfYoungNodes();
 
   // Update how much has survived scavenge.
   heap_->IncrementYoungSurvivorsCounter(heap_->SurvivedYoungObjectSize());
@@ -517,6 +520,7 @@ void ScavengerCollector::HandleSurvivingNewLargeObjects() {
     heap_->lo_space()->PromoteNewLargeObject(page);
   }
   surviving_new_large_objects_.clear();
+  heap_->new_lo_space()->set_objects_size(0);
 }
 
 void ScavengerCollector::MergeSurvivingNewLargeObjects(
@@ -531,7 +535,10 @@ void ScavengerCollector::MergeSurvivingNewLargeObjects(
 int ScavengerCollector::NumberOfScavengeTasks() {
   if (!FLAG_parallel_scavenge) return 1;
   const int num_scavenge_tasks =
-      static_cast<int>(heap_->new_space()->TotalCapacity()) / MB + 1;
+      static_cast<int>(
+          SemiSpaceNewSpace::From(heap_->new_space())->TotalCapacity()) /
+          MB +
+      1;
   static int num_cores = V8::GetCurrentPlatform()->NumberOfWorkerThreads() + 1;
   int tasks = std::max(
       1, std::min({num_scavenge_tasks, kMaxScavengerTasks, num_cores}));
